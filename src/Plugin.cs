@@ -100,18 +100,27 @@ namespace WodistantListFit
                 return;
             }
 
-            // 項目数と最初のテキストの長さが前回と同じ場合は中断する
-            int firstTextLength = 0;
+            // 項目数と最初のテキストが前回と同じ場合は中断する
+            string firstText = "";
             if (knownComboBoxes.TryGetValue(comboBoxHandle, out ComboBoxMemory comboBox))
             {
                 if (itemCount == comboBox.itemCount)
                 {
-                    firstTextLength = (int)PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_GETLBTEXTLEN, 0, 0);
-                    if (firstTextLength == comboBox.firstTextLength)
-                        return;
+                    const int firstIndex = 0;
+                    int firstTextLength = (int)PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_GETLBTEXTLEN, firstIndex, 0);
+                    if (firstTextLength > 0)
+                    {
+                        fixed (char* textChars = new char[firstTextLength])
+                        {
+                            PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_GETLBTEXT, firstIndex, (nint)textChars);
+                            firstText = new string(textChars);
+                        }
+                        if (firstText == comboBox.firstText)
+                            return;
+                    }
                 }
             }
-            knownComboBoxes[comboBoxHandle] = new ComboBoxMemory() { itemCount = itemCount, firstTextLength = firstTextLength };
+            knownComboBoxes[comboBoxHandle] = new ComboBoxMemory() { itemCount = itemCount, firstText = firstText };
 
             int width;
             if (itemCount == 0)
@@ -203,7 +212,7 @@ namespace WodistantListFit
         private struct ComboBoxMemory
         {
             public int itemCount;
-            public int firstTextLength;
+            public string firstText;
         }
     }
 }

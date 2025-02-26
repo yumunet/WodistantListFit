@@ -4,8 +4,15 @@
 
 ![動作イメージ](https://github.com/user-attachments/assets/641180f5-fed8-43bf-8574-1d052dba756d)
 
-## ライセンス
+## ダウンロード
 
-MIT License
+▶ [Releases](https://github.com/yumunet/WodistantListFit/releases) （Assets内のWodistantListFit-vX.X.X.zip）
 
-詳細は[LICENSE.txt](/LICENSE.txt)を参照。
+導入方法については、同梱のREADME.txtを参照してください。
+
+## 開発環境
+
+Visual Studio 2022
+
+runフォルダ直下にWodistantのファイルを丸ごと配置することでビルドできます。
+また、プロジェクトのプロパティの「デバッグ」から、「外部プログラムの開始」でrunフォルダ下のWodistant.exeを選択することでデバッグ実行ができます。

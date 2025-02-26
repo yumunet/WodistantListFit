@@ -89,6 +89,10 @@ namespace WodistantListFit
 
         private unsafe void FitDropDownListWidth(HWND comboBoxHandle)
         {
+#if DEBUG
+            var stopwatch = new Stopwatch();
+            stopwatch.Start();
+#endif
             var itemCount = (int)PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_GETCOUNT, 0, 0);
             if (itemCount == PInvoke.CB_ERR)
             {
@@ -190,6 +194,10 @@ namespace WodistantListFit
             {
                 PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_SHOWDROPDOWN, 1, 0);
             }
+#if DEBUG
+            stopwatch.Stop();
+            Debug.WriteLine($"{(int)(void*)comboBoxHandle:X8} {stopwatch.ElapsedMilliseconds}ms");
+#endif
         }
 
         private struct ComboBoxMemory

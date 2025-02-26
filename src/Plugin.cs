@@ -65,16 +65,19 @@ namespace WodistantListFit
 
                         PInvoke.EnumChildWindows(activeWindowHandle, (HWND childWindowHandle, LPARAM lParam) =>
                         {
-                            string className;
-                            const int classNameLength = 256;
-                            fixed (char* classNameChars = new char[classNameLength])
+                            if (PInvoke.IsWindowVisible(childWindowHandle) && PInvoke.IsWindowEnabled(childWindowHandle))
                             {
-                                PInvoke.GetClassName(childWindowHandle, classNameChars, classNameLength);
-                                className = new string(classNameChars);
-                            }
-                            if (className == "ComboBox")
-                            {
-                                FitDropDownListWidth(childWindowHandle);
+                                string className;
+                                const int classNameLength = 256;
+                                fixed (char* classNameChars = new char[classNameLength])
+                                {
+                                    PInvoke.GetClassName(childWindowHandle, classNameChars, classNameLength);
+                                    className = new string(classNameChars);
+                                }
+                                if (className == "ComboBox")
+                                {
+                                    FitDropDownListWidth(childWindowHandle);
+                                }
                             }
                             return true;
                         }, 0);

@@ -19,6 +19,8 @@ GetTextExtentPoint32
 GetWindowLong
 GetWindowThreadProcessId
 IsWindow
+IsWindowEnabled
+IsWindowVisible
 SelectObject
 SendMessage
 WINDOW_STYLE

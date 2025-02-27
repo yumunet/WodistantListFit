@@ -83,6 +83,13 @@ namespace WodistantListFit
                         }, 0);
                     }
                 }
+                else
+                {
+                    if (knownComboBoxes.Count > 0)
+                    {
+                        knownComboBoxes.Clear();
+                    }
+                }
                 Thread.Sleep(100);
             }
         }

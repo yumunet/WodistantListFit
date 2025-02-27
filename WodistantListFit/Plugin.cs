@@ -19,7 +19,7 @@ namespace WodistantListFit
 
         public override string Author => "yumu";
 
-        public override string Version => "1.0.0";
+        public override string Version => "1.0.1";
 
         public override string Description => "ドロップダウンリストの横幅を自動的に調整します。";
 

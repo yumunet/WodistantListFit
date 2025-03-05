@@ -6,9 +6,9 @@
 
 ## ダウンロード
 
-▶ [Releases](https://github.com/yumunet/WodistantListFit/releases) （Assets内のWodistantListFit-vX.X.X.zip）
+▶ [Releases](https://github.com/yumunet/WodistantListFit/releases/latest) （Assets内の`WodistantListFit-vX.X.X.zip`）
 
-導入方法については、同梱のREADME.txtを参照してください。
+導入方法については、同梱の「README.txt」を参照してください。
 
 ## 開発環境
 

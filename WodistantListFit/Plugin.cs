@@ -23,7 +23,7 @@ namespace WodistantListFit
 
         public override string Description => "ドロップダウンリストの横幅を自動的に調整します。";
 
-        public override MenuBarInfo ManuBarInfomation { get { return null; } }
+        public override MenuBarInfo ManuBarInfomation => null;
 
         public override IKeyboardAction[] KeyboardActions => new IKeyboardAction[] { };
 

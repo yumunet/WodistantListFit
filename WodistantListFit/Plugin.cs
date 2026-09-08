@@ -281,77 +281,72 @@ namespace WodistantListFit
                 return;
             }
 
-            int width;
+            // 項目がない場合はスキップ
             if (itemCount == 0)
+                return;
+
+            SIZE longestTextSize = new(0, 0);
+
+            // 外部プロセスのフォントハンドルはそのまま使えないので作り直す
+            HFONT originalFont = (HFONT)(nint)PInvoke.SendMessage(comboBox, PInvoke.WM_GETFONT, 0, 0);
+            LOGFONTW logFont;
+            PInvoke.GetObject(originalFont, sizeof(LOGFONTW), &logFont);
+            HFONT newFont = PInvoke.CreateFontIndirect(logFont);
+
+            HDC hDC = PInvoke.CreateCompatibleDC((HDC)(void*)0);
+            HBITMAP bitmap = PInvoke.CreateCompatibleBitmap(hDC, 1, 1);
+            HGDIOBJ oldBitmap = PInvoke.SelectObject(hDC, bitmap);
+            HGDIOBJ oldFont = PInvoke.SelectObject(hDC, newFont);
+
+            var textLengthes = new int[itemCount];
+            for (int i = 0; i < itemCount; i++)
             {
-                // 項目がない場合は0pxにする（コンボボックスの幅と同じになる）
-                width = 0;
+                int textLength = (int)(nint)PInvoke.SendMessage(comboBox, PInvoke.CB_GETLBTEXTLEN, (nuint)i, 0);
+                if (textLength == PInvoke.CB_ERR)
+                {
+                    Debug.WriteLine("CB_GETLBTEXTLENが失敗");
+                    break;
+                }
+                textLengthes[i] = textLength;
             }
-            else
+
+            // 長さは文字単位だが2バイト文字だと幅がほぼ倍になるため、最も長いテキストの半分より長いテキストのサイズをチェックする
+            int lengthLimit = textLengthes.Max() / 2;
+            for (int i = 0; i < itemCount; i++)
             {
-                SIZE longestTextSize = new(0, 0);
-
-                // 外部プロセスのフォントハンドルはそのまま使えないので作り直す
-                HFONT originalFont = (HFONT)(nint)PInvoke.SendMessage(comboBox, PInvoke.WM_GETFONT, 0, 0);
-                LOGFONTW logFont;
-                PInvoke.GetObject(originalFont, sizeof(LOGFONTW), &logFont);
-                HFONT newFont = PInvoke.CreateFontIndirect(logFont);
-
-                HDC hDC = PInvoke.CreateCompatibleDC((HDC)(void*)0);
-                HBITMAP bitmap = PInvoke.CreateCompatibleBitmap(hDC, 1, 1);
-                HGDIOBJ oldBitmap = PInvoke.SelectObject(hDC, bitmap);
-                HGDIOBJ oldFont = PInvoke.SelectObject(hDC, newFont);
-
-                var textLengthes = new int[itemCount];
-                for (int i = 0; i < itemCount; i++)
+                int length = textLengthes[i];
+                if (length >= lengthLimit)
                 {
-                    int textLength = (int)(nint)PInvoke.SendMessage(comboBox, PInvoke.CB_GETLBTEXTLEN, (nuint)i, 0);
-                    if (textLength == PInvoke.CB_ERR)
+                    string text;
+                    fixed (char* textChars = new char[length + 1])
                     {
-                        Debug.WriteLine("CB_GETLBTEXTLENが失敗");
-                        break;
+                        PInvoke.SendMessage(comboBox, PInvoke.CB_GETLBTEXT, (nuint)i, (nint)textChars);
+                        text = new string(textChars);
                     }
-                    textLengthes[i] = textLength;
-                }
 
-                // 長さは文字単位だが2バイト文字だと幅がほぼ倍になるため、最も長いテキストの半分より長いテキストのサイズをチェックする
-                int lengthLimit = textLengthes.Max() / 2;
-                for (int i = 0; i < itemCount; i++)
-                {
-                    int length = textLengthes[i];
-                    if (length >= lengthLimit)
+                    PInvoke.GetTextExtentPoint32W(hDC, text, text.Length, out SIZE textSize);
+                    if (textSize.Width > longestTextSize.Width)
                     {
-                        string text;
-                        fixed (char* textChars = new char[length + 1])
-                        {
-                            PInvoke.SendMessage(comboBox, PInvoke.CB_GETLBTEXT, (nuint)i, (nint)textChars);
-                            text = new string(textChars);
-                        }
-
-                        PInvoke.GetTextExtentPoint32W(hDC, text, text.Length, out SIZE textSize);
-                        if (textSize.Width > longestTextSize.Width)
-                        {
-                            longestTextSize = textSize;
-                        }
+                        longestTextSize = textSize;
                     }
                 }
+            }
 
-                PInvoke.SelectObject(hDC, oldBitmap);
-                PInvoke.SelectObject(hDC, oldFont);
-                PInvoke.DeleteObject(bitmap);
-                PInvoke.DeleteDC(hDC);
-                PInvoke.DeleteObject(newFont);
+            PInvoke.SelectObject(hDC, oldBitmap);
+            PInvoke.SelectObject(hDC, oldFont);
+            PInvoke.DeleteObject(bitmap);
+            PInvoke.DeleteDC(hDC);
+            PInvoke.DeleteObject(newFont);
 
-                width = longestTextSize.Width + longestTextSize.Height; // 余分に1文字分の幅を追加する
+            int width = longestTextSize.Width + longestTextSize.Height; // 余分に1文字分の幅を追加する
 
-                // スクロールバーがついている場合は、その分の横幅を足す
-                COMBOBOXINFO comboBoxInfo = new() { cbSize = (uint)sizeof(COMBOBOXINFO) };
-                PInvoke.GetComboBoxInfo(comboBox, ref comboBoxInfo);
-                int style = PInvoke.GetWindowLong(comboBoxInfo.hwndList, WINDOW_LONG_PTR_INDEX.GWL_STYLE);
-                if ((style & (int)WINDOW_STYLE.WS_VSCROLL) != 0)
-                {
-                    width += PInvoke.GetSystemMetrics(SYSTEM_METRICS_INDEX.SM_CXVSCROLL);
-                }
+            // スクロールバーがついている場合は、その分の横幅を足す
+            COMBOBOXINFO comboBoxInfo = new() { cbSize = (uint)sizeof(COMBOBOXINFO) };
+            PInvoke.GetComboBoxInfo(comboBox, ref comboBoxInfo);
+            int style = PInvoke.GetWindowLong(comboBoxInfo.hwndList, WINDOW_LONG_PTR_INDEX.GWL_STYLE);
+            if ((style & (int)WINDOW_STYLE.WS_VSCROLL) != 0)
+            {
+                width += PInvoke.GetSystemMetrics(SYSTEM_METRICS_INDEX.SM_CXVSCROLL);
             }
 
             bool isListOpen = (PInvoke.SendMessage(comboBox, PInvoke.CB_GETDROPPEDSTATE, 0, 0) != 0);

@@ -10,6 +10,7 @@ CreateCompatibleDC
 CreateFontIndirect
 DeleteDC
 EnumChildWindows
+EnumWindows
 GetClassName
 GetComboBoxInfo
 GetForegroundWindow

@@ -54,6 +54,11 @@ namespace WodistantListFit
             lifetimeCts.Dispose();
 
             StopSessionTasksAsync().GetAwaiter().GetResult();
+
+            if (woditorPId != 0)
+            {
+                ReestAllDropDownListWidth();
+            }
         }
 
         private async Task MonitorConnectionAsync(CancellationToken token)
@@ -95,6 +100,9 @@ namespace WodistantListFit
         private async Task OnDisconnectedAsync()
         {
             await StopSessionTasksAsync();
+
+            // 接続解除時にすべてのドロップダウンリストの横幅を元に戻す
+            ReestAllDropDownListWidth();
 
             woditorPId = 0;
         }
@@ -359,6 +367,38 @@ namespace WodistantListFit
             stopwatch.Stop();
             Debug.WriteLine($"{(int)(void*)comboBox:X8} {stopwatch.ElapsedMilliseconds}ms");
 #endif
+        }
+
+        private void ReestAllDropDownListWidth()
+        {
+            PInvoke.EnumWindows((window, lParam) =>
+            {
+                uint pId;
+                unsafe { PInvoke.GetWindowThreadProcessId(window, &pId); }
+                if (pId == woditorPId)
+                {
+                    PInvoke.EnumChildWindows(window, (childWindow, lParam2) =>
+                    {
+                        string className;
+                        unsafe
+                        {
+                            const int classNameLength = 256;
+                            fixed (char* classNameChars = new char[classNameLength])
+                            {
+                                PInvoke.GetClassName(childWindow, classNameChars, classNameLength);
+                                className = new string(classNameChars);
+                            }
+                        }
+                        if (className == "ComboBox")
+                        {
+                            // 0ではなく1でリセットできる
+                            PInvoke.SendMessage(childWindow, PInvoke.CB_SETDROPPEDWIDTH, 1, 0);
+                        }
+                        return true;
+                    }, 0);
+                }
+                return true;
+            }, 0);
         }
 
         private struct ComboBoxState

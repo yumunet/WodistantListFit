@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
@@ -27,107 +28,210 @@ namespace WodistantListFit
 
         public override IKeyboardAction[] KeyboardActions => new IKeyboardAction[] { };
 
-        private HWND oldActiveWindowHandle;
-        private readonly Dictionary<HWND, ComboBoxMemory> knownComboBoxes = new();
+        private readonly CancellationTokenSource lifetimeCts = new();
+        private CancellationTokenSource sessionCts;
+        private Task connectionMonitorTask;
+        private Task activeWindowMonitorTask;
+        private Task updateTask;
+
+        private uint woditorPId;
+        private Dictionary<HWND, ComboBoxState> knownComboBoxes = new();
 
         public override void OnInitializePlugin()
         {
-            Task.Run(() => Observer());
+            connectionMonitorTask = MonitorConnectionAsync(lifetimeCts.Token);
         }
 
-        private unsafe void Observer()
+        public override void OnFinalizePlugin()
         {
+            lifetimeCts.Cancel();
+            try
+            {
+                connectionMonitorTask.GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException) { }
+            lifetimeCts.Dispose();
+
+            StopSessionTasksAsync().GetAwaiter().GetResult();
+        }
+
+        private async Task MonitorConnectionAsync(CancellationToken token)
+        {
+            bool isWoditorConnected = false;
+
             while (true)
             {
+                await Task.Delay(10, token).ConfigureAwait(false);
+
                 if (Host.Environment.IsWoditorConnected)
                 {
-                    HWND activeWindowHandle = PInvoke.GetForegroundWindow();
-                    uint activePId;
-                    PInvoke.GetWindowThreadProcessId(activeWindowHandle, &activePId);
-
-                    uint woditorPId;
-                    PInvoke.GetWindowThreadProcessId((HWND)Host.MapEditor.GetMapEditorWindowHandle(), &woditorPId);
-
-                    if (activePId == woditorPId)
+                    if (!isWoditorConnected)
                     {
-                        // アクティブウィンドウが変わったときに、記憶しているコンボボックスすべての存在をチェック
-                        if (activeWindowHandle != oldActiveWindowHandle)
-                        {
-                            oldActiveWindowHandle = activeWindowHandle;
-                            foreach (var item in new Dictionary<HWND, ComboBoxMemory>(knownComboBoxes))
-                            {
-                                if (!PInvoke.IsWindow(item.Key))
-                                {
-                                    knownComboBoxes.Remove(item.Key);
-                                }
-                            }
-                        }
-
-                        PInvoke.EnumChildWindows(activeWindowHandle, (HWND childWindowHandle, LPARAM lParam) =>
-                        {
-                            if (PInvoke.IsWindowVisible(childWindowHandle) && PInvoke.IsWindowEnabled(childWindowHandle))
-                            {
-                                string className;
-                                const int classNameLength = 256;
-                                fixed (char* classNameChars = new char[classNameLength])
-                                {
-                                    PInvoke.GetClassName(childWindowHandle, classNameChars, classNameLength);
-                                    className = new string(classNameChars);
-                                }
-                                if (className == "ComboBox")
-                                {
-                                    FitDropDownListWidth(childWindowHandle);
-                                }
-                            }
-                            return true;
-                        }, 0);
+                        isWoditorConnected = true;
+                        OnConnected();
                     }
                 }
                 else
                 {
-                    if (knownComboBoxes.Count > 0)
+                    if (isWoditorConnected)
                     {
-                        knownComboBoxes.Clear();
+                        isWoditorConnected = false;
+                        await OnDisconnectedAsync().ConfigureAwait(false);
                     }
                 }
-                Thread.Sleep(100);
             }
         }
 
-        private unsafe void FitDropDownListWidth(HWND comboBoxHandle)
+        private void OnConnected()
+        {
+            uint pId;
+            unsafe { PInvoke.GetWindowThreadProcessId((HWND)Host.MapEditor.GetMapEditorWindowHandle(), &pId); }
+            woditorPId = pId;
+
+            StartSessionTasks();
+        }
+
+        private async Task OnDisconnectedAsync()
+        {
+            await StopSessionTasksAsync();
+
+            woditorPId = 0;
+        }
+
+        private void StartSessionTasks()
+        {
+            sessionCts = new CancellationTokenSource();
+            activeWindowMonitorTask = MonitorActiveWindowAsync(sessionCts.Token);
+            updateTask = UpdateLoopAsync(sessionCts.Token);
+        }
+
+        private async Task StopSessionTasksAsync()
+        {
+            if (sessionCts is null)
+                return;
+
+            sessionCts.Cancel();
+            try
+            {
+                await Task.WhenAll(activeWindowMonitorTask, updateTask).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { }
+            sessionCts.Dispose();
+            sessionCts = null;
+
+            ReplaceComboBoxCache();
+        }
+
+        private async Task MonitorActiveWindowAsync(CancellationToken token)
+        {
+            HWND lastWindow = HWND.Null;
+
+            while (true)
+            {
+                await Task.Delay(10, token).ConfigureAwait(false);
+
+                HWND activeWindow = PInvoke.GetForegroundWindow();
+                if (activeWindow != lastWindow)
+                {
+                    lastWindow = activeWindow;
+
+                    uint activePId;
+                    unsafe { PInvoke.GetWindowThreadProcessId(activeWindow, &activePId); }
+                    if (activePId == woditorPId)
+                    {
+                        OnActiveWindowChanged(activeWindow);
+                    }
+                }
+            }
+        }
+
+        private async Task UpdateLoopAsync(CancellationToken token)
+        {
+            while (true)
+            {
+                await Task.Delay(100, token).ConfigureAwait(false);
+
+                HWND activeWindow = PInvoke.GetForegroundWindow();
+
+                uint activePId;
+                unsafe { PInvoke.GetWindowThreadProcessId(activeWindow, &activePId); }
+                if (activePId != woditorPId)
+                    continue;
+
+                var cache = Volatile.Read(ref knownComboBoxes);
+                PInvoke.EnumChildWindows(activeWindow, (childWindow, lParam) =>
+                {
+                    if (!PInvoke.IsWindowVisible(childWindow) || !PInvoke.IsWindowEnabled(childWindow))
+                        return true;
+
+                    string className;
+                    unsafe
+                    {
+                        const int classNameLength = 256;
+                        fixed (char* classNameChars = new char[classNameLength])
+                        {
+                            PInvoke.GetClassName(childWindow, classNameChars, classNameLength);
+                            className = new string(classNameChars);
+                        }
+                    }
+                    if (className != "ComboBox")
+                        return true;
+
+                    // 項目数と最初のテキストが前回と同じ場合はスキップする
+                    int itemCount = (int)(nint)PInvoke.SendMessage(childWindow, PInvoke.CB_GETCOUNT, 0, 0);
+                    string firstText = "";
+                    const int index = 0;
+                    int textLength = (int)(nint)PInvoke.SendMessage(childWindow, PInvoke.CB_GETLBTEXTLEN, index, 0);
+                    if (textLength > 0)
+                    {
+                        unsafe
+                        {
+                            fixed (char* textChars = new char[textLength + 1])
+                            {
+                                PInvoke.SendMessage(childWindow, PInvoke.CB_GETLBTEXT, index, (nint)textChars);
+                                firstText = new string(textChars);
+                            }
+                        }
+                    }
+                    if (cache.TryGetValue(childWindow, out ComboBoxState comboBox))
+                    {
+                        if (itemCount == comboBox.ItemCount && firstText == comboBox.FirstText)
+                        {
+                            return true;
+                        }
+                    }
+                    cache[childWindow] = new ComboBoxState() { ItemCount = itemCount, FirstText = firstText };
+
+                    FitDropDownListWidth(childWindow);
+                    return true;
+                }, 0);
+            }
+        }
+
+        private void OnActiveWindowChanged(HWND activeWindow)
+        {
+            ReplaceComboBoxCache();
+
+            // todo: アクティブウィンドウのコンボボックス調整
+        }
+
+        private void ReplaceComboBoxCache()
+        {
+            Interlocked.Exchange(ref knownComboBoxes, new Dictionary<HWND, ComboBoxState>());
+        }
+
+        private unsafe void FitDropDownListWidth(HWND comboBox)
         {
 #if DEBUG
             var stopwatch = new Stopwatch();
             stopwatch.Start();
 #endif
-            var itemCount = (int)PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_GETCOUNT, 0, 0);
+            int itemCount = (int)(nint)PInvoke.SendMessage(comboBox, PInvoke.CB_GETCOUNT, 0, 0);
             if (itemCount == PInvoke.CB_ERR)
             {
                 Debug.WriteLine("CB_GETCOUNTが失敗");
                 return;
             }
-
-            // 項目数と最初のテキストが前回と同じ場合は中断する
-            string firstText = "";
-            if (knownComboBoxes.TryGetValue(comboBoxHandle, out ComboBoxMemory comboBox))
-            {
-                if (itemCount == comboBox.itemCount)
-                {
-                    const int firstIndex = 0;
-                    int firstTextLength = (int)PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_GETLBTEXTLEN, firstIndex, 0);
-                    if (firstTextLength > 0)
-                    {
-                        fixed (char* textChars = new char[firstTextLength])
-                        {
-                            PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_GETLBTEXT, firstIndex, (nint)textChars);
-                            firstText = new string(textChars);
-                        }
-                        if (firstText == comboBox.firstText)
-                            return;
-                    }
-                }
-            }
-            knownComboBoxes[comboBoxHandle] = new ComboBoxMemory() { itemCount = itemCount, firstText = firstText };
 
             int width;
             if (itemCount == 0)
@@ -140,20 +244,20 @@ namespace WodistantListFit
                 SIZE longestTextSize = new(0, 0);
 
                 // 外部プロセスのフォントハンドルはそのまま使えないので作り直す
-                var fontHandle = (HFONT)(nint)PInvoke.SendMessage(comboBoxHandle, PInvoke.WM_GETFONT, 0, 0);
+                HFONT originalFont = (HFONT)(nint)PInvoke.SendMessage(comboBox, PInvoke.WM_GETFONT, 0, 0);
                 LOGFONTW logFont;
-                PInvoke.GetObject(fontHandle, sizeof(LOGFONTW), &logFont);
-                HFONT newFontHandle = PInvoke.CreateFontIndirect(logFont);
+                PInvoke.GetObject(originalFont, sizeof(LOGFONTW), &logFont);
+                HFONT newFont = PInvoke.CreateFontIndirect(logFont);
 
                 HDC hDC = PInvoke.CreateCompatibleDC((HDC)(void*)0);
-                HBITMAP bitmapHandle = PInvoke.CreateCompatibleBitmap(hDC, 1, 1);
-                var originalBitmapHandle = PInvoke.SelectObject(hDC, bitmapHandle);
-                var originalFontHandle = PInvoke.SelectObject(hDC, newFontHandle);
+                HBITMAP bitmap = PInvoke.CreateCompatibleBitmap(hDC, 1, 1);
+                HGDIOBJ oldBitmap = PInvoke.SelectObject(hDC, bitmap);
+                HGDIOBJ oldFont = PInvoke.SelectObject(hDC, newFont);
 
                 var textLengthes = new int[itemCount];
                 for (int i = 0; i < itemCount; i++)
                 {
-                    var textLength = (int)PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_GETLBTEXTLEN, (nuint)i, 0);
+                    int textLength = (int)(nint)PInvoke.SendMessage(comboBox, PInvoke.CB_GETLBTEXTLEN, (nuint)i, 0);
                     if (textLength == PInvoke.CB_ERR)
                     {
                         Debug.WriteLine("CB_GETLBTEXTLENが失敗");
@@ -166,17 +270,17 @@ namespace WodistantListFit
                 int lengthLimit = textLengthes.Max() / 2;
                 for (int i = 0; i < itemCount; i++)
                 {
-                    int textLength = textLengthes[i];
-                    if (textLength >= lengthLimit)
+                    int length = textLengthes[i];
+                    if (length >= lengthLimit)
                     {
                         string text;
-                        fixed (char* textChars = new char[textLength])
+                        fixed (char* textChars = new char[length + 1])
                         {
-                            PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_GETLBTEXT, (nuint)i, (nint)textChars);
+                            PInvoke.SendMessage(comboBox, PInvoke.CB_GETLBTEXT, (nuint)i, (nint)textChars);
                             text = new string(textChars);
                         }
 
-                        PInvoke.GetTextExtentPoint32W(hDC, text, textLength, out SIZE textSize);
+                        PInvoke.GetTextExtentPoint32W(hDC, text, text.Length, out SIZE textSize);
                         if (textSize.Width > longestTextSize.Width)
                         {
                             longestTextSize = textSize;
@@ -184,17 +288,17 @@ namespace WodistantListFit
                     }
                 }
 
-                PInvoke.SelectObject(hDC, originalBitmapHandle);
-                PInvoke.SelectObject(hDC, originalFontHandle);
-                PInvoke.DeleteObject(bitmapHandle);
+                PInvoke.SelectObject(hDC, oldBitmap);
+                PInvoke.SelectObject(hDC, oldFont);
+                PInvoke.DeleteObject(bitmap);
                 PInvoke.DeleteDC(hDC);
-                PInvoke.DeleteObject(newFontHandle);
+                PInvoke.DeleteObject(newFont);
 
                 width = longestTextSize.Width + longestTextSize.Height; // 余分に1文字分の幅を追加する
 
                 // スクロールバーがついている場合は、その分の横幅を足す
                 COMBOBOXINFO comboBoxInfo = new() { cbSize = (uint)sizeof(COMBOBOXINFO) };
-                PInvoke.GetComboBoxInfo(comboBoxHandle, ref comboBoxInfo);
+                PInvoke.GetComboBoxInfo(comboBox, ref comboBoxInfo);
                 int style = PInvoke.GetWindowLong(comboBoxInfo.hwndList, WINDOW_LONG_PTR_INDEX.GWL_STYLE);
                 if ((style & (int)WINDOW_STYLE.WS_VSCROLL) != 0)
                 {
@@ -202,25 +306,25 @@ namespace WodistantListFit
                 }
             }
 
-            bool isShownList = (PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_GETDROPPEDSTATE, 0, 0) != 0);
-            PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_SETDROPPEDWIDTH, (nuint)width, 0);
+            bool isListOpen = (PInvoke.SendMessage(comboBox, PInvoke.CB_GETDROPPEDSTATE, 0, 0) != 0);
+            PInvoke.SendMessage(comboBox, PInvoke.CB_SETDROPPEDWIDTH, (nuint)width, 0);
 
             // リストが開かれていた場合は、CB_SETDROPPEDWIDTHでリストが閉じられてしまうため、再度開く
             // テキストサイズの取得処理中やアクティブウィンドウを切り替えた瞬間などに、ユーザーに開かれる可能性がある
-            if (isShownList)
+            if (isListOpen)
             {
-                PInvoke.SendMessage(comboBoxHandle, PInvoke.CB_SHOWDROPDOWN, 1, 0);
+                PInvoke.SendMessage(comboBox, PInvoke.CB_SHOWDROPDOWN, 1, 0);
             }
 #if DEBUG
             stopwatch.Stop();
-            Debug.WriteLine($"{(int)(void*)comboBoxHandle:X8} {stopwatch.ElapsedMilliseconds}ms");
+            Debug.WriteLine($"{(int)(void*)comboBox:X8} {stopwatch.ElapsedMilliseconds}ms");
 #endif
         }
 
-        private struct ComboBoxMemory
+        private struct ComboBoxState
         {
-            public int itemCount;
-            public string firstText;
+            public int ItemCount;
+            public string FirstText;
         }
     }
 }

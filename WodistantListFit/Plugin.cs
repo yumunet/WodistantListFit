@@ -36,6 +36,7 @@ namespace WodistantListFit
 
         private uint woditorPId;
         private Dictionary<HWND, ComboBoxState> knownComboBoxes = new();
+        private bool isActiveWindowChanging = false;
 
         public override void OnInitializePlugin()
         {
@@ -151,6 +152,10 @@ namespace WodistantListFit
             {
                 await Task.Delay(100, token).ConfigureAwait(false);
 
+                // すでにアクティブウィンドウを処理中の場合はスキップ
+                if (Volatile.Read(ref isActiveWindowChanging))
+                    continue;
+
                 HWND activeWindow = PInvoke.GetForegroundWindow();
 
                 uint activePId;
@@ -161,46 +166,19 @@ namespace WodistantListFit
                 var cache = Volatile.Read(ref knownComboBoxes);
                 PInvoke.EnumChildWindows(activeWindow, (childWindow, lParam) =>
                 {
-                    if (!PInvoke.IsWindowVisible(childWindow) || !PInvoke.IsWindowEnabled(childWindow))
+                    if (!IsTargetComboBox(childWindow))
                         return true;
 
-                    string className;
-                    unsafe
+                    // コンボボックスの状態（項目数と最初のテキスト）が前回と同じ場合はスキップする
+                    ComboBoxState state = GetComboBoxState(childWindow);
+                    if (cache.TryGetValue(childWindow, out ComboBoxState lastState))
                     {
-                        const int classNameLength = 256;
-                        fixed (char* classNameChars = new char[classNameLength])
-                        {
-                            PInvoke.GetClassName(childWindow, classNameChars, classNameLength);
-                            className = new string(classNameChars);
-                        }
-                    }
-                    if (className != "ComboBox")
-                        return true;
-
-                    // 項目数と最初のテキストが前回と同じ場合はスキップする
-                    int itemCount = (int)(nint)PInvoke.SendMessage(childWindow, PInvoke.CB_GETCOUNT, 0, 0);
-                    string firstText = "";
-                    const int index = 0;
-                    int textLength = (int)(nint)PInvoke.SendMessage(childWindow, PInvoke.CB_GETLBTEXTLEN, index, 0);
-                    if (textLength > 0)
-                    {
-                        unsafe
-                        {
-                            fixed (char* textChars = new char[textLength + 1])
-                            {
-                                PInvoke.SendMessage(childWindow, PInvoke.CB_GETLBTEXT, index, (nint)textChars);
-                                firstText = new string(textChars);
-                            }
-                        }
-                    }
-                    if (cache.TryGetValue(childWindow, out ComboBoxState comboBox))
-                    {
-                        if (itemCount == comboBox.ItemCount && firstText == comboBox.FirstText)
+                        if (state.ItemCount == lastState.ItemCount && state.FirstText == lastState.FirstText)
                         {
                             return true;
                         }
                     }
-                    cache[childWindow] = new ComboBoxState() { ItemCount = itemCount, FirstText = firstText };
+                    cache[childWindow] = state;
 
                     FitDropDownListWidth(childWindow);
                     return true;
@@ -210,9 +188,71 @@ namespace WodistantListFit
 
         private void OnActiveWindowChanged(HWND activeWindow)
         {
-            ReplaceComboBoxCache();
+            Volatile.Write(ref isActiveWindowChanging, true);
+            try
+            {
+                // アクティブウィンドウが切り替わったときに即時更新
+                ReplaceComboBoxCache();
 
-            // todo: アクティブウィンドウのコンボボックス調整
+                var cache = Volatile.Read(ref knownComboBoxes);
+                PInvoke.EnumChildWindows(activeWindow, (childWindow, lParam) =>
+                {
+                    if (!IsTargetComboBox(childWindow))
+                        return true;
+
+                    ComboBoxState state = GetComboBoxState(childWindow);
+                    cache[childWindow] = state;
+
+                    FitDropDownListWidth(childWindow);
+                    return true;
+                }, 0);
+            }
+            finally
+            {
+                Volatile.Write(ref isActiveWindowChanging, false);
+            }
+        }
+
+        private bool IsTargetComboBox(HWND window)
+        {
+            if (!PInvoke.IsWindowVisible(window) || !PInvoke.IsWindowEnabled(window))
+                return false;
+
+            string className;
+            unsafe
+            {
+                const int classNameLength = 256;
+                fixed (char* classNameChars = new char[classNameLength])
+                {
+                    PInvoke.GetClassName(window, classNameChars, classNameLength);
+                    className = new string(classNameChars);
+                }
+            }
+            if (className != "ComboBox")
+                return false;
+
+            return true;
+        }
+
+        private ComboBoxState GetComboBoxState(HWND comboBox)
+        {
+            int itemCount = (int)(nint)PInvoke.SendMessage(comboBox, PInvoke.CB_GETCOUNT, 0, 0);
+
+            string firstText = "";
+            const int index = 0;
+            int textLength = (int)(nint)PInvoke.SendMessage(comboBox, PInvoke.CB_GETLBTEXTLEN, index, 0);
+            if (textLength > 0)
+            {
+                unsafe
+                {
+                    fixed (char* textChars = new char[textLength + 1])
+                    {
+                        PInvoke.SendMessage(comboBox, PInvoke.CB_GETLBTEXT, index, (nint)textChars);
+                        firstText = new string(textChars);
+                    }
+                }
+            }
+            return new ComboBoxState() { ItemCount = itemCount, FirstText = firstText };
         }
 
         private void ReplaceComboBoxCache()

@@ -1,6 +1,6 @@
 # ListFit for Wodistant
 
-[Wodistant](https://alpha-stella.com/tool/wodistant/) に「ウディタのドロップダウンリストの横幅を自動的に調整する」機能を追加するプラグインです。
+ウディタのドロップダウンリストの横幅を自動的に調整する、[Wodistant](https://alpha-stella.com/tool/wodistant/)用のプラグインです。
 
 ![動作イメージ](https://github.com/user-attachments/assets/641180f5-fed8-43bf-8574-1d052dba756d)
 
@@ -12,6 +12,6 @@
 
 ## 開発環境
 
-Visual Studio 2022
+Visual Studio 2026
 
 runフォルダ直下にWodistantのファイルを丸ごと配置することで、ビルド・デバッグ実行ができます。

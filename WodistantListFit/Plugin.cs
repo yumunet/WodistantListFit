@@ -67,21 +67,18 @@ namespace WodistantListFit
             {
                 await Task.Delay(10, token).ConfigureAwait(false);
 
-                if (Host.Environment.IsWoditorConnected)
+                bool connected = Host.Environment.IsWoditorConnected;
+                if (connected == isWoditorConnected)
+                    continue;
+
+                isWoditorConnected = connected;
+                if (isWoditorConnected)
                 {
-                    if (!isWoditorConnected)
-                    {
-                        isWoditorConnected = true;
-                        OnConnected();
-                    }
+                    OnConnected();
                 }
                 else
                 {
-                    if (isWoditorConnected)
-                    {
-                        isWoditorConnected = false;
-                        await OnDisconnectedAsync().ConfigureAwait(false);
-                    }
+                    await OnDisconnectedAsync().ConfigureAwait(false);
                 }
             }
         }
@@ -214,20 +211,17 @@ namespace WodistantListFit
             if (!PInvoke.IsWindowVisible(window) || !PInvoke.IsWindowEnabled(window))
                 return false;
 
-            string className;
-            unsafe
-            {
-                const int classNameLength = 256;
-                fixed (char* classNameChars = new char[classNameLength])
-                {
-                    PInvoke.GetClassName(window, classNameChars, classNameLength);
-                    className = new string(classNameChars);
-                }
-            }
-            if (className != "ComboBox")
-                return false;
+            return GetClassName(window) == "ComboBox";
+        }
 
-            return true;
+        private unsafe string GetClassName(HWND window)
+        {
+            const int classNameLength = 256;
+            fixed (char* classNameChars = new char[classNameLength])
+            {
+                PInvoke.GetClassName(window, classNameChars, classNameLength);
+                return new string(classNameChars);
+            }
         }
 
         private ComboBoxState GetComboBoxState(HWND comboBox)
@@ -254,8 +248,7 @@ namespace WodistantListFit
         private unsafe void FitDropDownListWidth(HWND comboBox)
         {
 #if DEBUG
-            var stopwatch = new Stopwatch();
-            stopwatch.Start();
+            var stopwatch = Stopwatch.StartNew();
 #endif
             int itemCount = (int)(nint)PInvoke.SendMessage(comboBox, PInvoke.CB_GETCOUNT, 0, 0);
             if (itemCount == PInvoke.CB_ERR)
@@ -357,17 +350,7 @@ namespace WodistantListFit
                 {
                     PInvoke.EnumChildWindows(window, (childWindow, lParam2) =>
                     {
-                        string className;
-                        unsafe
-                        {
-                            const int classNameLength = 256;
-                            fixed (char* classNameChars = new char[classNameLength])
-                            {
-                                PInvoke.GetClassName(childWindow, classNameChars, classNameLength);
-                                className = new string(classNameChars);
-                            }
-                        }
-                        if (className == "ComboBox")
+                        if (GetClassName(childWindow) == "ComboBox")
                         {
                             // 0ではなく1でリセットできる
                             PInvoke.SendMessage(childWindow, PInvoke.CB_SETDROPPEDWIDTH, 1, 0);

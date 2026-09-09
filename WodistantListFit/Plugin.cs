@@ -55,7 +55,7 @@ namespace WodistantListFit
 
             if (woditorPId != 0)
             {
-                ReestAllDropDownListWidth();
+                ResetAllDropDownListWidth();
             }
         }
 
@@ -97,7 +97,7 @@ namespace WodistantListFit
             await StopSessionAsync();
 
             // 接続解除時にすべてのドロップダウンリストの横幅を元に戻す
-            ReestAllDropDownListWidth();
+            ResetAllDropDownListWidth();
 
             woditorPId = 0;
         }
@@ -274,7 +274,7 @@ namespace WodistantListFit
             HGDIOBJ oldBitmap = PInvoke.SelectObject(hDC, bitmap);
             HGDIOBJ oldFont = PInvoke.SelectObject(hDC, newFont);
 
-            var textLengthes = new int[itemCount];
+            var textLengths = new int[itemCount];
             for (int i = 0; i < itemCount; i++)
             {
                 int textLength = (int)(nint)PInvoke.SendMessage(comboBox, PInvoke.CB_GETLBTEXTLEN, (nuint)i, 0);
@@ -283,14 +283,14 @@ namespace WodistantListFit
                     Debug.WriteLine("CB_GETLBTEXTLENが失敗");
                     break;
                 }
-                textLengthes[i] = textLength;
+                textLengths[i] = textLength;
             }
 
             // 長さは文字単位だが2バイト文字だと幅がほぼ倍になるため、最も長いテキストの半分より長いテキストのサイズをチェックする
-            int lengthLimit = textLengthes.Max() / 2;
+            int lengthLimit = textLengths.Max() / 2;
             for (int i = 0; i < itemCount; i++)
             {
-                int length = textLengthes[i];
+                int length = textLengths[i];
                 if (length >= lengthLimit)
                 {
                     string text;
@@ -340,7 +340,7 @@ namespace WodistantListFit
 #endif
         }
 
-        private void ReestAllDropDownListWidth()
+        private void ResetAllDropDownListWidth()
         {
             PInvoke.EnumWindows((window, lParam) =>
             {

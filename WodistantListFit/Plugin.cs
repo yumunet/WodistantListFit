@@ -31,12 +31,10 @@ namespace WodistantListFit
         private readonly CancellationTokenSource lifetimeCts = new();
         private CancellationTokenSource sessionCts;
         private Task connectionMonitorTask;
-        private Task activeWindowMonitorTask;
         private Task updateTask;
 
+        private readonly Dictionary<HWND, ComboBoxState> knownComboBoxes = new();
         private uint woditorPId;
-        private Dictionary<HWND, ComboBoxState> knownComboBoxes = new();
-        private bool isActiveWindowChanging = false;
 
         public override void OnInitializePlugin()
         {
@@ -53,7 +51,7 @@ namespace WodistantListFit
             catch (OperationCanceledException) { }
             lifetimeCts.Dispose();
 
-            StopSessionTasksAsync().GetAwaiter().GetResult();
+            StopSessionAsync().GetAwaiter().GetResult();
 
             if (woditorPId != 0)
             {
@@ -94,12 +92,12 @@ namespace WodistantListFit
             unsafe { PInvoke.GetWindowThreadProcessId((HWND)Host.MapEditor.GetMapEditorWindowHandle(), &pId); }
             woditorPId = pId;
 
-            StartSessionTasks();
+            StartSession();
         }
 
         private async Task OnDisconnectedAsync()
         {
-            await StopSessionTasksAsync();
+            await StopSessionAsync();
 
             // 接続解除時にすべてのドロップダウンリストの横幅を元に戻す
             ReestAllDropDownListWidth();
@@ -107,14 +105,13 @@ namespace WodistantListFit
             woditorPId = 0;
         }
 
-        private void StartSessionTasks()
+        private void StartSession()
         {
             sessionCts = new CancellationTokenSource();
-            activeWindowMonitorTask = MonitorActiveWindowAsync(sessionCts.Token);
             updateTask = UpdateLoopAsync(sessionCts.Token);
         }
 
-        private async Task StopSessionTasksAsync()
+        private async Task StopSessionAsync()
         {
             if (sessionCts is null)
                 return;
@@ -122,24 +119,28 @@ namespace WodistantListFit
             sessionCts.Cancel();
             try
             {
-                await Task.WhenAll(activeWindowMonitorTask, updateTask).ConfigureAwait(false);
+                await updateTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
             sessionCts.Dispose();
             sessionCts = null;
 
-            ReplaceComboBoxCache();
+            knownComboBoxes.Clear();
         }
 
-        private async Task MonitorActiveWindowAsync(CancellationToken token)
+        private async Task UpdateLoopAsync(CancellationToken token)
         {
             HWND lastWindow = HWND.Null;
+            const int periodicUpdateInterval = 100;
+            Task periodicUpdateDelay = Task.Delay(periodicUpdateInterval, token);
 
             while (true)
             {
                 await Task.Delay(10, token).ConfigureAwait(false);
 
                 HWND activeWindow = PInvoke.GetForegroundWindow();
+
+                // アクティブウィンドウが切り替わったときに即時更新
                 if (activeWindow != lastWindow)
                 {
                     lastWindow = activeWindow;
@@ -148,77 +149,64 @@ namespace WodistantListFit
                     unsafe { PInvoke.GetWindowThreadProcessId(activeWindow, &activePId); }
                     if (activePId == woditorPId)
                     {
-                        OnActiveWindowChanged(activeWindow);
+                        UpdateAllComboBoxes(activeWindow);
+                        continue;
                     }
+                }
+
+                // 定期更新
+                if (periodicUpdateDelay.IsCompleted)
+                {
+                    uint activePId;
+                    unsafe { PInvoke.GetWindowThreadProcessId(activeWindow, &activePId); }
+                    if (activePId == woditorPId)
+                    {
+                        UpdateChangedComboBoxes(activeWindow);
+                    }
+
+                    periodicUpdateDelay = Task.Delay(periodicUpdateInterval, token);
                 }
             }
         }
 
-        private async Task UpdateLoopAsync(CancellationToken token)
+        private void UpdateAllComboBoxes(HWND parentWindow)
         {
-            while (true)
+            knownComboBoxes.Clear();
+
+            PInvoke.EnumChildWindows(parentWindow, (childWindow, lParam) =>
             {
-                await Task.Delay(100, token).ConfigureAwait(false);
-
-                // すでにアクティブウィンドウを処理中の場合はスキップ
-                if (Volatile.Read(ref isActiveWindowChanging))
-                    continue;
-
-                HWND activeWindow = PInvoke.GetForegroundWindow();
-
-                uint activePId;
-                unsafe { PInvoke.GetWindowThreadProcessId(activeWindow, &activePId); }
-                if (activePId != woditorPId)
-                    continue;
-
-                var cache = Volatile.Read(ref knownComboBoxes);
-                PInvoke.EnumChildWindows(activeWindow, (childWindow, lParam) =>
-                {
-                    if (!IsTargetComboBox(childWindow))
-                        return true;
-
-                    // コンボボックスの状態（項目数と最初のテキスト）が前回と同じ場合はスキップする
-                    ComboBoxState state = GetComboBoxState(childWindow);
-                    if (cache.TryGetValue(childWindow, out ComboBoxState lastState))
-                    {
-                        if (state.ItemCount == lastState.ItemCount && state.FirstText == lastState.FirstText)
-                        {
-                            return true;
-                        }
-                    }
-                    cache[childWindow] = state;
-
-                    FitDropDownListWidth(childWindow);
+                if (!IsTargetComboBox(childWindow))
                     return true;
-                }, 0);
-            }
+
+                ComboBoxState state = GetComboBoxState(childWindow);
+                knownComboBoxes[childWindow] = state;
+
+                FitDropDownListWidth(childWindow);
+                return true;
+            }, 0);
         }
 
-        private void OnActiveWindowChanged(HWND activeWindow)
+        private void UpdateChangedComboBoxes(HWND parentWindow)
         {
-            Volatile.Write(ref isActiveWindowChanging, true);
-            try
+            PInvoke.EnumChildWindows(parentWindow, (childWindow, lParam) =>
             {
-                // アクティブウィンドウが切り替わったときに即時更新
-                ReplaceComboBoxCache();
-
-                var cache = Volatile.Read(ref knownComboBoxes);
-                PInvoke.EnumChildWindows(activeWindow, (childWindow, lParam) =>
-                {
-                    if (!IsTargetComboBox(childWindow))
-                        return true;
-
-                    ComboBoxState state = GetComboBoxState(childWindow);
-                    cache[childWindow] = state;
-
-                    FitDropDownListWidth(childWindow);
+                if (!IsTargetComboBox(childWindow))
                     return true;
-                }, 0);
-            }
-            finally
-            {
-                Volatile.Write(ref isActiveWindowChanging, false);
-            }
+
+                // コンボボックスの状態（項目数と最初のテキスト）が前回と同じ場合はスキップする
+                ComboBoxState state = GetComboBoxState(childWindow);
+                if (knownComboBoxes.TryGetValue(childWindow, out ComboBoxState lastState))
+                {
+                    if (state.ItemCount == lastState.ItemCount && state.FirstText == lastState.FirstText)
+                    {
+                        return true;
+                    }
+                }
+                knownComboBoxes[childWindow] = state;
+
+                FitDropDownListWidth(childWindow);
+                return true;
+            }, 0);
         }
 
         private bool IsTargetComboBox(HWND window)
@@ -261,11 +249,6 @@ namespace WodistantListFit
                 }
             }
             return new ComboBoxState() { ItemCount = itemCount, FirstText = firstText };
-        }
-
-        private void ReplaceComboBoxCache()
-        {
-            Interlocked.Exchange(ref knownComboBoxes, new Dictionary<HWND, ComboBoxState>());
         }
 
         private unsafe void FitDropDownListWidth(HWND comboBox)
